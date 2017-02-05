@@ -7,6 +7,7 @@
 #include <random>
 #include <algorithm>
 
+
 static const size_t arms_cnt = 10;
 static const size_t run_steps_cnt = 1000;
 static const size_t runs_cnt = 2000;
@@ -103,10 +104,20 @@ public:
         start();
     }
 
-    void start()
+    void start(double initValue = 0.)
     {
         m_avg_rewards.clear();
-        m_avg_rewards.resize(arms_cnt, std::make_pair<size_t, double>(0, 0.));
+        m_avg_rewards.resize(arms_cnt, std::pair<size_t, double>(0, initValue));
+        m_total_reward = 0.;
+    }
+    void start(const std::vector<double> &initValue)
+    {
+        m_avg_rewards.clear();
+        assert(m_arms_cnt == initValue.size());
+        for (size_t i = 0; i < m_arms_cnt; i++)
+        {
+            m_avg_rewards.push_back(std::pair<size_t, double>(0, initValue[i]));
+        }
         m_total_reward = 0.;
     }
 
@@ -163,14 +174,15 @@ int main(int argc, char **argv)
         std::cout << std::endl << mean_mean / arms_cnt << std::endl;
     }
 
-    cv::Mat avg_step_rewards = cv::Mat::zeros(run_steps_cnt, 10 + 1, CV_64FC1);
+    cv::Mat avg_step_rewards = cv::Mat::zeros(run_steps_cnt, sizeof(epsilons) / sizeof(double) + 5, CV_64FC1);
     for (int run = 0; run < runs_cnt; run++)
     {
         MultiArmsBanditModelPrecalc model(param_rewards, run_steps_cnt, run);//use run index as seed for model
 
         std::cout << "run: " << run << "\r"; std::cout.flush();
 
-        for (int a = 0; a < sizeof(epsilons) / sizeof(double); a++)
+        int a = 0;
+        for (; a < sizeof(epsilons) / sizeof(double); a++)
         {
             const double epsilon = epsilons[a];
 
@@ -185,6 +197,66 @@ int main(int argc, char **argv)
                 avg_step_rewards.at<double>((int)i, a) += reward;
             }
         }
+
+        {
+            MultiArmsBanditEpsGreedyStrategy strategy(arms_cnt, 0, a + run + 1);
+            strategy.start(10.0);
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
+        {
+            MultiArmsBanditEpsGreedyStrategy strategy(arms_cnt, 0, a + run + 1);
+            strategy.start(-10.0);
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
+        {
+            std::vector<double> initValue(arms_cnt);
+            for (size_t i = 0; i < arms_cnt; i++)
+                initValue[i] = param_rewards[i].mean();
+            MultiArmsBanditEpsGreedyStrategy strategy(arms_cnt, 0, a + run + 1);
+            strategy.start(initValue);
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
+        {
+            MultiArmsBanditEpsGreedyStrategy strategy(arms_cnt, 0.05, a + run + 1);
+            strategy.start(10.0);
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
     }
 
     std::ofstream ofs("./rewards.dat");
@@ -192,7 +264,7 @@ int main(int argc, char **argv)
     {
         ofs << i << " ";
         double *ptr = avg_step_rewards.ptr<double>(i);
-        for (int a = 0; a < 11; a++)
+        for (int a = 0; a < avg_step_rewards.cols; a++)
         {
             ofs << ptr[a] / runs_cnt << " ";
         }
