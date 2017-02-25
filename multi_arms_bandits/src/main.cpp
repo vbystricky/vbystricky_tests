@@ -153,6 +153,60 @@ private:
     AvgRevards m_avg_rewards;
 };
 
+class MultiArmsBanditUCBStrategy
+{
+    typedef std::pair<size_t, double>    AvgRevardsItem;
+    typedef std::vector<AvgRevardsItem>  AvgRevards;
+public:
+    MultiArmsBanditUCBStrategy(size_t arms_cnt, double coeff = 0., int seed = 1)
+        : m_arms_cnt(arms_cnt)
+        , m_coeff(coeff)
+        , m_total_reward(std::make_pair(0, 0.))
+    {
+        start();
+    }
+
+    void start(double initValue = 0.)
+    {
+        m_avg_rewards.clear();
+        m_avg_rewards.resize(arms_cnt, std::pair<size_t, double>(0, initValue));
+        m_total_reward = std::make_pair(0, 0.);
+    }
+    void start(const std::vector<double> &initValue)
+    {
+        m_avg_rewards.clear();
+        assert(m_arms_cnt == initValue.size());
+        for (size_t i = 0; i < m_arms_cnt; i++)
+        {
+            m_avg_rewards.push_back(std::pair<size_t, double>(0, initValue[i]));
+        }
+        m_total_reward = std::make_pair(0, 0.);
+    }
+
+    size_t getNextStepArm()
+    {
+        std::vector<double> ucbValues(m_arms_cnt);
+        for (size_t i = 0; i < m_arms_cnt; i++)
+        {
+            if (0 == m_avg_rewards[i].first)
+                return i;
+            ucbValues[i] = m_avg_rewards[i].second + m_coeff * sqrt(log(m_total_reward.first) / m_avg_rewards[i].first);
+        }
+        return argmax(ucbValues, [](double item1, double item2) { return item1 < item2; });
+    }
+    void updateReward(size_t arm, double reward)
+    {
+        m_total_reward.first++;
+        m_total_reward.second += reward;
+        m_avg_rewards[arm].first++;
+        m_avg_rewards[arm].second += (reward - m_avg_rewards[arm].second) / (double)m_avg_rewards[arm].first;
+    }
+private:
+    size_t m_arms_cnt;
+    double m_coeff;
+    AvgRevardsItem m_total_reward;
+    AvgRevards m_avg_rewards;
+};
 
 int main(int argc, char **argv)
 {
@@ -174,7 +228,7 @@ int main(int argc, char **argv)
         std::cout << std::endl << mean_mean / arms_cnt << std::endl;
     }
 
-    cv::Mat avg_step_rewards = cv::Mat::zeros(run_steps_cnt, sizeof(epsilons) / sizeof(double) + 5, CV_64FC1);
+    cv::Mat avg_step_rewards = cv::Mat::zeros(run_steps_cnt, sizeof(epsilons) / sizeof(double) + 10, CV_64FC1);
     for (int run = 0; run < runs_cnt; run++)
     {
         MultiArmsBanditModelPrecalc model(param_rewards, run_steps_cnt, run);//use run index as seed for model
@@ -246,6 +300,35 @@ int main(int argc, char **argv)
         {
             MultiArmsBanditEpsGreedyStrategy strategy(arms_cnt, 0.05, a + run + 1);
             strategy.start(10.0);
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
+        for (int i = 0; i < 4; i++)
+        {
+            MultiArmsBanditUCBStrategy strategy(arms_cnt, 0.5 + 0.5 * i, a + run + 1);
+            strategy.start();
+            for (size_t i = 0; i < run_steps_cnt; i++)
+            {
+                size_t arm = strategy.getNextStepArm();
+
+                double reward = model.get_reward(arm, i);
+                strategy.updateReward(arm, reward);
+
+                avg_step_rewards.at<double>((int)i, a) += reward;
+            }
+            a++;
+        }
+        {
+            MultiArmsBanditUCBStrategy strategy(arms_cnt, 8. , a + run + 1);
+            strategy.start();
             for (size_t i = 0; i < run_steps_cnt; i++)
             {
                 size_t arm = strategy.getNextStepArm();
